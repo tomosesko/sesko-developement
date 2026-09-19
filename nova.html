@@ -79,17 +79,26 @@ body.gate #gate{display:flex}
       </div>
     </div>
 
-    <!-- ponudba hitre prijave, takoj po registraciji -->
+    <!-- vrnitev v aplikacijo: samo obraz ali prst -->
+    <div id="gateFace" hidden>
+      <h1 id="gateFaceName">Prijava</h1>
+      <p class="lead" id="gateFaceLead">Potrdi z obrazom ali prstnim odtisom.</p>
+      <div class="gate-msg" id="gateFaceMsg"></div>
+      <div class="gate-form">
+        <button type="button" class="btn primary" id="btnFace">Prijava</button>
+      </div>
+      <div class="gate-alt"><button type="button" id="naGeslo">Ne gre? Prijava z geslom</button></div>
+    </div>
+
+    <!-- vklop ob registraciji, če brskalnik zahteva dotik -->
     <div id="gateBio" hidden>
-      <h1>Račun je narejen</h1>
-      <p class="lead" id="gateBioLead">Vklopi hitro prijavo, da ti ne bo treba tipkati gesla.</p>
+      <h1>Še zadnji korak</h1>
+      <p class="lead" id="gateBioLead">Potrdi z obrazom, da se odslej prijaviš brez gesla.</p>
       <div class="gate-msg" id="gateBioMsg"></div>
       <div class="gate-form">
-        <button type="button" class="btn primary gate-bio" id="btnBioOn">Vklopi hitro prijavo</button>
+        <button type="button" class="btn primary" id="btnBioOn">Potrdi</button>
       </div>
-      <div class="gate-alt">
-        <button type="button" id="bioSkip">Preskoči, vpisoval bom geslo</button>
-      </div>
+      <div class="gate-alt"><button type="button" id="bioSkip">Preskoči</button></div>
     </div>
 
     <!-- prijava -->
@@ -99,9 +108,6 @@ body.gate #gate{display:flex}
         <p class="lead">Vpiši se in tvoje ure so na vseh napravah.</p>
       </div>
       <div class="gate-msg" id="gateLoginMsg"></div>
-
-      <button type="button" class="btn primary" id="btnPasskeyLogin" hidden>Prijava s Face ID</button>
-      <div class="gate-sep" id="gateSep" hidden><span>ali z geslom</span></div>
 
       <div class="field">
         <label for="liEmail">E-mail</label>
@@ -1685,7 +1691,7 @@ var SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzXDD9xMb1F54kVRD8KNyN
   /* ---------------- stanje zaslona ---------------- */
   function pokazi(kateri) {
     zapriNastavitve();
-    ["gateLogin", "gateRegister", "gateBio"].forEach(function (id) {
+    ["gateLogin", "gateRegister", "gateBio", "gateFace"].forEach(function (id) {
       $(id).hidden = id !== kateri;
     });
     document.body.classList.add("gate");
@@ -1906,13 +1912,17 @@ var SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzXDD9xMb1F54kVRD8KNyN
 
     /* Hitro prijavo ponudimo takoj, ne skrito v Nastavitvah. WebAuthn zahteva
        pravi tap uporabnika, zato gumb, ne samodejni poskus ob nalaganju. */
-    if (!passkeyPodprt() || beri(K_BIO) || beri(K_BIO_NE)) { koncajPrijavo(); return; }
-    ponudiBiometrijo();
+    /* Vklopimo takoj. Brskalnik zahteva človekov dotik, zato poskusimo sami —
+       če nas ustavi, pokažemo en gumb; nihče ne obtiči. */
+    if (!passkeyPodprt() || beri(K_BIO)) { koncajPrijavo(); return; }
+    passkeyVpisi(beri(K_TOKEN))
+      .then(function () { koncajPrijavo(); window.__delovnikToast("Odslej se prijaviš z obrazom."); })
+      .catch(function () { ponudiBiometrijo(); });
   }
 
   function ponudiBiometrijo() {
     $("gateBioLead").textContent =
-      "Odslej se prijaviš s " + imeBiometrije() + " namesto z geslom. Traja sekundo.";
+      "Potrdi s " + imeBiometrije() + ", da se odslej prijaviš brez gesla.";
     pokazi("gateBio");
 
     var gumb = $("btnBioOn");
@@ -1976,26 +1986,34 @@ var SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzXDD9xMb1F54kVRD8KNyN
 
   $("toRegister").onclick = function () { pokazi("gateRegister"); };
   $("toLogin").onclick = function () { pokazi("gateLogin"); };
-  if (passkeyPodprt()) {
-    $("btnPasskeyLogin").hidden = false;
-    $("gateSep").hidden = false;
-    $("btnPasskeyLogin").onclick = function () {
-      var b = $("btnPasskeyLogin"), m = $("gateLoginMsg");
-      pocisti(m); b.disabled = true; b.textContent = "Počakaj…";
-      passkeyPrijava()
-        .then(function (o) {
-          b.disabled = false; b.textContent = "Prijava s Face ID";
-          if (!o || !o.ok) { sporocilo(m, (o && o.message) || "Passkey ni bil prepoznan."); return; }
-          shrani(K_BIO, "1");
-          poPrijavi(o, (o.state && o.state.profile && o.state.profile.name) || beri(K_NAME) || "");
-        })
-        .catch(function () {
-          b.disabled = false; b.textContent = "Prijava s Face ID";
-          sporocilo(m, "Prijava s passkeyem ni uspela. Vpiši e-mail in geslo.");
-        });
-    };
+  /* Zaslon ob vrnitvi: samo obraz. Poskusi sam, gumb je za ponovni poskus. */
+  var faceTece = false;
+  function poskusiObraz(samodejno) {
+    if (faceTece) return;
+    faceTece = true;
+    var b = $("btnFace"), m = $("gateFaceMsg");
+    if (m.className.indexOf("err") !== -1) pocisti(m);
+    b.disabled = true; b.textContent = "Počakaj…";
+    passkeyPrijava()
+      .then(function (o) {
+        faceTece = false; b.disabled = false; b.textContent = "Prijava";
+        if (!o || !o.ok) {
+          sporocilo(m, (o && o.message) || "Passkey ni bil prepoznan.");
+          return;
+        }
+        shrani(K_BIO, "1");
+        poPrijavi(o, (o.state && o.state.profile && o.state.profile.name) || beri(K_NAME) || "");
+      })
+      .catch(function () {
+        faceTece = false; b.disabled = false; b.textContent = "Poskusi znova";
+        if (!samodejno) sporocilo(m, "Ni uspelo. Poskusi znova ali se prijavi z geslom.");
+      });
   }
+  $("btnFace").onclick = function () { poskusiObraz(false); };
+  $("naGeslo").onclick = function () { pokazi("gateLogin"); };
 
+  $("toRegister").onclick = function () { pokazi("gateRegister"); };
+  $("toLogin").onclick = function () { pokazi("gateLogin"); };
   /* ---------------- zagon ---------------- */
   var token = beri(K_TOKEN);
   var poteklo = sejaPotekla();
@@ -2008,16 +2026,26 @@ var SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzXDD9xMb1F54kVRD8KNyN
   }
 
   if (!token) {
-    pokazi("gateLogin");
     var zadnjiMail = beri(K_EMAIL);
     if (zadnjiMail) {
       $("liEmail").value = zadnjiMail;
-      setTimeout(function () { try { $("liPass").focus(); } catch (e) {} }, 80);
     }
-    if (poteklo) {
-      sporocilo($("gateLoginMsg"), beri(K_BIO)
-        ? "Nekaj dni te ni bilo. Potrdi z obrazom ali prstom."
-        : "Nekaj dni te ni bilo, zato te je aplikacija odjavila. Vpiši geslo.", "info");
+
+    /* Napravo, ki jo poznamo, pozdravi samo obraz. Geslo je skrito za povezavo,
+       da nihče ne ostane zaklenjen ven, če biometrija odpove. */
+    if (zadnjiMail && passkeyPodprt()) {
+      var ime = beri(K_NAME);
+      if (ime) $("gateFaceName").textContent = "Pozdravljen, " + ime.split(" ")[0];
+      $("gateFaceLead").textContent = "Potrdi s " + imeBiometrije() + ".";
+      pokazi("gateFace");
+      setTimeout(function () { poskusiObraz(true); }, 300);
+    } else {
+      pokazi("gateLogin");
+      if (zadnjiMail) setTimeout(function () { try { $("liPass").focus(); } catch (e) {} }, 80);
+      if (poteklo) {
+        sporocilo($("gateLoginMsg"),
+          "Nekaj dni te ni bilo, zato te je aplikacija odjavila. Vpiši geslo.", "info");
+      }
     }
   } else {
     postaviPill(); postaviRacun();
