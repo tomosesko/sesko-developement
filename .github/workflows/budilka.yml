@@ -1,0 +1,17 @@
+name: Budilka za bazo
+
+on:
+  schedule:
+    - cron: "17 6,18 * * *"
+  workflow_dispatch:
+
+jobs:
+  zbudi:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Poklici Supabase
+        run: |
+          KODA=$(curl -sS -o /dev/null -w "%{http_code}" \
+            "https://yoystbujxcdqxjrpmaow.supabase.co/rest/v1/zasedeno?select=id&limit=1&apikey=sb_publishable_rUmJa7jgyiqkHNALpDn3vA_tMnHVVGC")
+          echo "Baza je odgovorila s kodo $KODA"
+          test "$KODA" = "200"
